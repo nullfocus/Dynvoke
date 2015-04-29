@@ -4,66 +4,70 @@ using System.Collections.Generic;
 
 namespace sample
 {
-    [DynvokeObject]
-    public class Person{
-        public string First { get; set; }
-        public string Last { get; set;}
-        public int Age { get; set; }
-    }
+	[DynvokeObject]
+	public class Person
+	{
+		public string First { get; set; }
 
-    [DynvokeClass(AltName="endpoint")]
-    public static class MyJSONEndpoint
-    {
-        [DynvokeMethod(AltName="mytest")]
-        public static object test()
-        {
-            return "hello there, you called test()!";
-        }
+		public string Last { get; set; }
 
-        public static Person getPerson(){
-            return new Person () {
-                First = "Bob",
-                Last = "Smith",
-                Age = 23
-            };
-        }
+		public int Age { get; set; }
+	}
 
-        public static void setPerson(Person p)
-        {
-            Console.WriteLine("received person: " + p.First + ", " + p.Last + " (" + p.Age + ")");
-        }
+	[DynvokeClass (AltName = "endpoint")]
+	public static class MyJSONEndpoint
+	{
+		[DynvokeMethod (AltName = "mytest")]
+		public static object test ()
+		{
+			return "hello there, you called test()!";
+		}
 
-        public static Dictionary<string, string> environment()
-        {
-            Dictionary<string, string> envvars = new Dictionary<string, string>();
+		public static Person getPerson ()
+		{
+			return new Person () {
+				First = "Bob",
+				Last = "Smith",
+				Age = 23
+			};
+		}
 
-            foreach (var property in typeof(Environment).GetProperties())
-            {
-                string name = property.Name;
-                object value = property.GetValue(null);
-                envvars.Add(name, (value == null ? "" : value.ToString()));
-            }
+		public static void setPerson (Person p)
+		{
+			Console.WriteLine ("received person: " + p.First + ", " + p.Last + " (" + p.Age + ")");
+		}
 
-            return envvars;
-        }
+		public static Dictionary<string, string> environment ()
+		{
+			Dictionary<string, string> envvars = new Dictionary<string, string> ();
 
-        [DynvokeMethod(AltName = "test")]
-        public static string anothercall()
-        {
-            //when attempting to call test it actually calls this because of the AltName!
-            return "you called anothercall()!";
-        }
+			foreach (var property in typeof(Environment).GetProperties()) {
+				string name = property.Name;
+				object value = property.GetValue (null);
+				envvars.Add (name, (value == null ? "" : value.ToString ()));
+			}
 
-        public static int add(int x, int y)
-        {
-            //try calling this one with the generated.js call:  api.endpoint.add(x, y, successFunc, failureFunc)
-            return x + y;
-        }
+			return envvars;
+		}
 
-        private static void CannotCallThis(){
-            //can't call this since it's protected!
+		[DynvokeMethod (AltName = "test")]
+		public static string anothercall ()
+		{
+			//when attempting to call test it actually calls this because of the AltName!
+			return "you called anothercall()!";
+		}
 
-            //make helpers protected/private!
-        }
-    }
+		public static int add (int x, int y)
+		{
+			//try calling this one with the generated.js call:  api.endpoint.add(x, y, successFunc, failureFunc)
+			return x + y;
+		}
+
+		private static void CannotCallThis ()
+		{
+			//can't call this since it's protected!
+
+			//make helpers protected/private!
+		}
+	}
 }
