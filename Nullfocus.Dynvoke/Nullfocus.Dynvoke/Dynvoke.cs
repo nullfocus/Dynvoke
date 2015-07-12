@@ -2,123 +2,130 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 using Common.Logging;
 
 namespace Nullfocus.Dynvoke
 {
-    public class DynvokeRequest
+    public delegate object ParamReplacment(object value);
+    public delegate object ParamInjection();
+
+    public interface ParamProvider
     {
-        public string Controller { get; set; }
-
-        public string Action { get; set; }
-
-        public string RequestBody { get; set; }
-
-        public DynvokeRequest ()
-        {
-        }
-
-        public DynvokeRequest (string controller, string action, string requestBody)
-        {
-            this.Controller = controller;
-            this.Action = action;
-            this.RequestBody = requestBody;
-        }
-    }
-
-    public class DynvokeResponse
-    {
-        public int StatusCode { get; set; }
-
-        public string ContentType { get; set; }
-
-        public string ResponseBody { get; set; }
-
-        public DynvokeResponse () : this (200, "", "text/html")
-        {
-        }
-
-        public DynvokeResponse (int statusCode, string responseBody) : this (statusCode, responseBody, "text/html")
-        {
-        }
-
-        public DynvokeResponse (int statusCode, string responseBody, string contentType)
-        {
-            this.StatusCode = statusCode;
-            this.ResponseBody = responseBody;
-            this.ContentType = contentType;
-        }
+        bool TryGetParam(string name, Type type, out object value);
     }
 
     public class Dynvoke
     {
-        private static readonly ILog Log = LogManager.GetCurrentClassLogger ();
+        private static readonly ILog Log = LogManager.GetCurrentClassLogger();
 
-        private static readonly DynvokeResponse NOT_FOUND = new DynvokeResponse (404, "Not Found");
-        private static readonly DynvokeResponse BAD_ARGUMENTS = new DynvokeResponse (400, "Arguments need to be wrapped in a JSON object");
-        private static readonly DynvokeResponse MISSING_ARGUMENTS = new DynvokeResponse (400, "Missing arguments");
-        private static readonly DynvokeResponse SERVER_ERROR = new DynvokeResponse (500, "Server Error");
+        private bool initialized = false;
 
         private Dictionary<string, DynvokeTarget> Targets = new Dictionary<string, DynvokeTarget> ();
         private List<DynvokeObject> DynvokeObjects = new List<DynvokeObject> ();
-
-        private IParameterFilter ParameterFilter { get; set; }
-
+                
         public IReadOnlyList<DynvokeTarget> AllTargets { get { return Targets.Values.ToList (); } }
 
         public IReadOnlyList<DynvokeObject> AllObjects { get { return DynvokeObjects; } }
+        
+        private DynvokeMethod Get(string classname, string methodname)
+        {
+            string key = GetKey(classname, methodname);
 
+            if (!Targets.ContainsKey(key))
+                return null;
 
-        public Dynvoke () : this(null)
-        {            
+            DynvokeMethod method = new DynvokeMethod(Targets[key]);
+
+            return method;
         }
 
-        public Dynvoke (IParameterFilter filter)
+        private class DictParamProvider : ParamProvider
         {
-            this.ParameterFilter = filter;
+            private Dictionary<string, object> dict = null;
 
-            FindTargets ();
-        }
+            public DictParamProvider(Dictionary<string, object> dict)
+            {
+                this.dict = dict;
+            }
 
-        public DynvokeResponse HandleRequest (DynvokeRequest request)
-        {
-            try {
-                DateTime requestStart = DateTime.Now;
+            public bool TryGetParam(string name, Type type, out object value)
+            {
+                name = name.ToLower();
 
-                string json = request.RequestBody;
+                if (dict.TryGetValue(name, out value))
+                {
+                    if(value == null || value.GetType() == type)
+                        return true;
+                }
 
-                DynvokeMethod method = Get (request.Controller, request.Action);
+                value = null;
 
-                PrepTarget (method, json);
-
-                if (method == null)
-                    return NOT_FOUND;
-
-                if (!method.ReadyToCall)
-                    return MISSING_ARGUMENTS;            
-            
-                object returnObj = method.Call ();
-
-                string outputStr = "";
-
-                if (returnObj != null)
-                    outputStr = JsonConvert.SerializeObject (returnObj);
-
-                Log.Debug ("Called method, returned: " + outputStr);
-                Log.Debug ("Total response time in [" + DateTime.Now.Subtract (requestStart).TotalMilliseconds + "] ms");
-
-                return new DynvokeResponse (200, outputStr, "application/json");
-
-            } catch (Exception e) {
-                Log.Error ("Exception thrown while handling request!\n" + e.ToString ());
-                return SERVER_ERROR;
+                return false;
             }
         }
 
-        private void FindTargets ()
+        public DynvokeMethod PrepTarget(string classname, string methodname, Dictionary<string, object> parameters)
         {
+            return PrepTarget(classname, methodname, new DictParamProvider(parameters));
+        }
+
+        public DynvokeMethod PrepTarget(string classname, string methodname, ParamProvider provider)
+        {
+            DynvokeMethod method = Get(classname, methodname);
+
+            if (method == null)
+                return null;
+
+            foreach (KeyValuePair<string, Type> entry in method.Parameters)
+            {
+                object value = null;
+
+                if (provider.TryGetParam(entry.Key, entry.Value, out value))
+                {
+                    if (ParamReplacersExternal.ContainsKey(entry.Key) && ParamReplacersExternal[entry.Key].ExternalType == entry.Value)
+                    {
+                        ParamReplacmentContainer replCont = ParamReplacersExternal[entry.Key];
+
+                        object newvalue = replCont.Replacer(value);
+
+                        Log.Debug("  Replacement: [" + replCont.InternalParamName + "] = (" + replCont.InternalType + ") [" + newvalue + "]");
+
+                        method.SetParameter(replCont.InternalParamName, newvalue);
+                    }
+                    else
+                    {
+                        Log.Debug("  Parameter:   [" + entry.Key + "] = (" + entry.Value + ") [" + value + "]");
+
+                        method.SetParameter(entry.Key, value);
+                    }
+                }                
+            }
+
+            foreach(KeyValuePair<string, Type> entry in method.InjectedParameters){
+                object value = null;
+
+                if (ParamInjectors.ContainsKey(entry.Key) && ParamInjectors[entry.Key].Type == entry.Value)
+                {
+                    ParamInjectionContainer injCont = ParamInjectors[entry.Key];
+
+                    value = injCont.Injector();
+
+                    Log.Debug("  Injected:    [" + entry.Key + "] = (" + entry.Value + ") [" + value + "]");
+
+                    method.SetParameter(entry.Key, value);
+                }
+            }
+
+            return method;
+        }
+
+        public void FindTargets ()
+        {
+            if (!initialized)
+                initialized = true;
+            else
+                return;
+
             Log.Debug ("Finding Dynvoke targets...");
 
             List<Type> attributedClasses = new List<Type> ();
@@ -179,6 +186,7 @@ namespace Nullfocus.Dynvoke
                     Type returnType = method.ReturnParameter.ParameterType;
 
                     Dictionary<string, Type> Parameters = new Dictionary<string,Type> ();
+                    Dictionary<string, Type> InjectedParameters = new Dictionary<string, Type>();
                     List<string> ParamOrder = new List<string> ();
 
                     ParameterInfo[] methodParams = method.GetParameters ();
@@ -190,23 +198,41 @@ namespace Nullfocus.Dynvoke
                         string paramName = parameter.Name.ToLower ();
                         Type paramType = parameter.ParameterType;
 
-                        if (ParameterFilter != null)
-                            ParameterFilter.ProcessDefinition (ref paramName, ref paramType);
+                        ParamOrder.Add(paramName);
 
-                        Log.Debug ("    [" + paramName + "] (" + paramType.Name + ")");
+                        if (this.ParamInjectors.ContainsKey(paramName) && this.ParamInjectors[paramName].Type == paramType)
+                        {
+                            Log.Debug("    [" + paramName + "] (" + paramType.Name + ") <- Injected");
 
-                        if (null != parameter.ParameterType.GetCustomAttribute<DynvokeObjectAttribute> (true) &&
-                        !parameterDynObjs.Contains (parameter.ParameterType))
-                            parameterDynObjs.Add (parameter.ParameterType);
+                            InjectedParameters.Add(paramName, paramType);
+                            continue;
+                        }
+                        
+                        if (this.ParamReplacersInternal.ContainsKey(paramName) && this.ParamReplacersInternal[paramName].InternalType == paramType)
+                        {
+                            ParamReplacmentContainer replCont = this.ParamReplacersInternal[paramName];
 
-                        ParamOrder.Add (paramName);
+                            Log.Debug("    [" + paramName + "] (" + paramType.Name + ") <- Replaced with [" + replCont.ExternalType + "] (" + replCont.ExternalParamName + ")");
+
+                            paramName = replCont.ExternalParamName;
+                            paramType = replCont.ExternalType;
+                        }
+                        else
+                        {
+                            Log.Debug("    [" + paramName + "] (" + paramType.Name + ")");
+                        }
+
+                        if (null != paramType.GetCustomAttribute<DynvokeObjectAttribute>(true) && !parameterDynObjs.Contains(paramType))
+                            parameterDynObjs.Add(paramType);
+                        
                         Parameters.Add (paramName, paramType);
                     }                            
 
                     DynvokeTarget target = new DynvokeTarget () {
                         Method = method,
-                        ParamOrder = ParamOrder,
-                        Paramters = Parameters,
+                        InteralParamOrder = ParamOrder,
+                        ExternalParameters = Parameters,
+                        InjectedParameters = InjectedParameters,
 
                         ControllerName = controllerName,
                         ActionName = actionName
@@ -229,19 +255,7 @@ namespace Nullfocus.Dynvoke
 
             Log.Debug ("Completed Dynvoke search");
         }
-
-        private DynvokeMethod Get (string classname, string methodname)
-        {
-            string key = GetKey (classname, methodname);
-
-            if (!Targets.ContainsKey (key))
-                return null;
-
-            DynvokeMethod method = new DynvokeMethod (Targets [key], ParameterFilter);
-
-            return method;
-        }
-
+        
         #region private static helper methods
 
         private static string GetControllerName (Type classType)
@@ -282,31 +296,52 @@ namespace Nullfocus.Dynvoke
             return controllerName.ToLower () + "." + actionName.ToLower ();
         }
 
-        private static void PrepTarget (DynvokeMethod method, string json)
+        #endregion
+
+        #region Param Configuration
+
+        private class ParamInjectionContainer
         {
-            if (!string.IsNullOrEmpty (json)) {
-                JObject jsonObj = JObject.Parse (json);
+            public string ParamName { get; set; }
+            public Type Type { get; set; }
+            public ParamInjection Injector { get; set; }
+        }
 
-                if (jsonObj.Type != JTokenType.Object) {
-                    Log.Error ("Could not parse json request!");
-                    return;
-                }
+        private class ParamReplacmentContainer
+        {
+            public string InternalParamName { get; set; }
+            public Type InternalType { get; set; }
+            public string ExternalParamName { get; set; }
+            public Type ExternalType { get; set; }
+            public ParamReplacment Replacer { get; set; }
+        }
 
-                foreach (JProperty child in jsonObj.Children<JProperty>()) {
-                    string paramName = child.Name;
+        private Dictionary<string, ParamInjectionContainer> ParamInjectors = new Dictionary<string, ParamInjectionContainer>();
+        private Dictionary<string, ParamReplacmentContainer> ParamReplacersInternal = new Dictionary<string, ParamReplacmentContainer>();
+        private Dictionary<string, ParamReplacmentContainer> ParamReplacersExternal = new Dictionary<string, ParamReplacmentContainer>();
+        
+        public void AddParamInjection(string paramName, Type type, ParamInjection paramInjection)
+        {
+            ParamInjectors.Add(paramName, new ParamInjectionContainer()
+            {
+                ParamName = paramName.ToLower(),
+                Type = type,
+                Injector = paramInjection
+            });
+        }
 
-                    Type paramType = null;
+        public void AddParamReplacement(string internalParamName, Type internalType, string externalParamName, Type externalType, ParamReplacment paramReplacment)
+        {
+            ParamReplacmentContainer container = new ParamReplacmentContainer(){
+                InternalParamName = internalParamName.ToLower(),
+                InternalType = internalType,
+                ExternalParamName = externalParamName.ToLower(),
+                ExternalType = externalType,
+                Replacer = paramReplacment
+            };
 
-                    if (method.Paramters.TryGetValue (paramName, out paramType)) {
-                        object value = child.Value.ToObject (paramType);
-
-                        Log.Debug ("  [" + paramName + "] = [" + value + "]");
-
-                        method.SetParameter (paramName, value);
-                    } else
-                        Log.Debug ("Unused property [" + paramName + "]");
-                }
-            }
+            ParamReplacersInternal.Add(internalParamName, container);
+            ParamReplacersExternal.Add(externalParamName, container);
         }
 
         #endregion

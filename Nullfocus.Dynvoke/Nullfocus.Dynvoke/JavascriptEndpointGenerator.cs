@@ -4,60 +4,57 @@ using System.Collections.Generic;
 
 namespace Nullfocus.Dynvoke
 {
-    public class JavascriptEndpointGenerator
+    public static class JavascriptEndpointGenerator
     {
-        private Dynvoke Dynvoke { get; set; }
-
-        public JavascriptEndpointGenerator (Dynvoke dynvoke)
+        public static string GenerateJavascript(Dynvoke dynvoke, string customNamespace)
         {
-            this.Dynvoke = dynvoke;
-        }
+            StringBuilder output = new StringBuilder();
+            StringBuilder angularOut = new StringBuilder();
 
-        public string GenerateJavascript (string customNamespace)
-        {
-            StringBuilder output = new StringBuilder ();
-            StringBuilder angularOut = new StringBuilder ();
+            Dictionary<string, List<DynvokeTarget>> targetsByController = new Dictionary<string, List<DynvokeTarget>>();
 
-            Dictionary<string, List<DynvokeTarget>> targetsByController = new Dictionary<string, List<DynvokeTarget>> ();
-			
-            foreach (DynvokeTarget target in Dynvoke.AllTargets) {
-                if (!targetsByController.ContainsKey (target.ControllerName))
-                    targetsByController.Add (target.ControllerName, new List<DynvokeTarget> ());
+            foreach (DynvokeTarget target in dynvoke.AllTargets)
+            {
+                if (!targetsByController.ContainsKey(target.ControllerName))
+                    targetsByController.Add(target.ControllerName, new List<DynvokeTarget>());
 
-                targetsByController [target.ControllerName].Add (target);
+                targetsByController[target.ControllerName].Add(target);
             }
 
-            output.Append (string.Format (namespaceStr, customNamespace));
+            output.Append(string.Format(namespaceStr, customNamespace));
 
-            foreach (DynvokeObject dynObj in Dynvoke.AllObjects) {
+            foreach (DynvokeObject dynObj in dynvoke.AllObjects)
+            {
                 string className = dynObj.Name;
-                string parameters = string.Join (", ", dynObj.PropertyNamesAndTypes.Keys);
-                string properties = string.Join ("\n    ", dynObj.PropertyNamesAndTypes.Select (k => k.Key + " = " + k.Key + "; //" + k.Value));                    
+                string parameters = string.Join(", ", dynObj.PropertyNamesAndTypes.Keys);
+                string properties = string.Join("\n    ", dynObj.PropertyNamesAndTypes.Select(k => k.Key + " = " + k.Key + "; //" + k.Value));
 
-                output.Append (string.Format (classStr, customNamespace, className, parameters, properties));
+                output.Append(string.Format(classStr, customNamespace, className, parameters, properties));
             }
 
-            foreach (string controllerName in targetsByController.Keys) {
-                output.Append (string.Format (controllerStr, customNamespace, controllerName));
+            foreach (string controllerName in targetsByController.Keys)
+            {
+                output.Append(string.Format(controllerStr, customNamespace, controllerName));
 
-                angularOut.Append (string.Format (angularObject, customNamespace, controllerName));
+                angularOut.Append(string.Format(angularObject, customNamespace, controllerName));
 
-                foreach (DynvokeTarget target in targetsByController[controllerName]) {
-                    string parameters = string.Join (", ", target.ParamOrder);
+                foreach (DynvokeTarget target in targetsByController[controllerName])
+                {
+                    string parameters = string.Join(", ", target.ParameterNames);
                     parameters += (parameters.Length > 0 ? ", " : "");
 
                     string endpoint = "/" + customNamespace + "/" + controllerName + "/" + target.ActionName;
-                    string properties = string.Join (", ", target.ParamOrder.Select<string, string> (p => p + ":" + p));
+                    string properties = string.Join(", ", target.ParameterNames.Select<string, string>(p => p + ":" + p));
 
-                    output.Append (string.Format (ajaxStr, customNamespace, controllerName, target.ActionName, parameters, endpoint, properties));
+                    output.Append(string.Format(ajaxStr, customNamespace, controllerName, target.ActionName, parameters, endpoint, properties));
 
-                    angularOut.Append (string.Format (angularHttp, customNamespace, controllerName, target.ActionName, parameters, endpoint, properties));
+                    angularOut.Append(string.Format(angularHttp, customNamespace, controllerName, target.ActionName, parameters, endpoint, properties));
                 }
             }
 
-            output.Append (string.Format (angularService, customNamespace, angularOut.ToString ()));
+            output.Append(string.Format(angularService, customNamespace, angularOut.ToString()));
 
-            return output.ToString ();
+            return output.ToString();
         }
 
 

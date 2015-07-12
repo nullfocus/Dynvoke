@@ -10,25 +10,22 @@ namespace Nullfocus.Dynvoke
     {
         private static readonly ILog Log = LogManager.GetCurrentClassLogger ();
 
-        private static readonly DynvokeResponse BAD_REQUEST = new DynvokeResponse (400, "Bad Request");
+        private static readonly HttpDynvokeResponse BAD_REQUEST = new HttpDynvokeResponse(400, "Bad Request");
 
-        private Dynvoke dynvoke = null;
-        private DynvokeResponse GENERATED_JS = null;
+        public HttpDynvoke HttpDynvoke { get; set; }
+
+        private string customNamespace = null;
+        private HttpDynvokeResponse _GeneratedJS = null;
         private Thread listenThread = null;
         private HttpListener listener = null;
         private CountdownEvent requestProcessingCounter = new CountdownEvent (1);
 
-        public HttpDynvokeServer (string ipOrHostname, int port, string customNamespace) : this (ipOrHostname, port, customNamespace, null)
+        public HttpDynvokeServer(string ipOrHostname, int port, string customNamespace) : this(new HttpDynvoke(), ipOrHostname, port, customNamespace) { }
+
+        public HttpDynvokeServer (HttpDynvoke httpDynvoke, string ipOrHostname, int port, string customNamespace)
         {
-        }
-
-        public HttpDynvokeServer (string ipOrHostname, int port, string customNamespace, IParameterFilter filter)
-        { 
-            dynvoke = new Dynvoke (filter);
-
-            JavascriptEndpointGenerator gen = new JavascriptEndpointGenerator (dynvoke);
-            string generatedJS = gen.GenerateJavascript (customNamespace);
-            GENERATED_JS = new DynvokeResponse (200, generatedJS, "application/javascript");
+            HttpDynvoke = httpDynvoke;
+            this.customNamespace = customNamespace;
 
             listener = new HttpListener ();
             listener.AuthenticationSchemes = AuthenticationSchemes.Anonymous;
@@ -36,6 +33,8 @@ namespace Nullfocus.Dynvoke
 
             this.listenThread = new Thread (new ParameterizedThreadStart (ListenerThread));
         }
+
+        public void FindTargets() { this.HttpDynvoke.Dynvoke.FindTargets(); }
 
         public void Start ()
         {
@@ -92,26 +91,40 @@ namespace Nullfocus.Dynvoke
             }
         }
 
+        private HttpDynvokeResponse GeneratedJS
+        {
+            get
+            {
+                if (_GeneratedJS == null)
+                {
+                    string generatedJS = JavascriptEndpointGenerator.GenerateJavascript(this.HttpDynvoke.Dynvoke, this.customNamespace);
+                    _GeneratedJS = new HttpDynvokeResponse(200, generatedJS, "application/javascript");
+                }
+
+                return _GeneratedJS;
+            }
+        }
+
         private void HandleRequest (HttpListenerRequest request, HttpListenerResponse response)
         {
-            DynvokeResponse dynResp = null;
+            HttpDynvokeResponse dynResp = null;
 
             string[] parts = request.Url.AbsolutePath.Split (new char[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
 
             if (request.Url.AbsolutePath.StartsWith ("/generated.js")) {
-                dynResp = GENERATED_JS;
+                dynResp = GeneratedJS;
 
             } else if (parts.Length != 2) {
                 dynResp = BAD_REQUEST;
 
             } else {
-                DynvokeRequest dynReq = new DynvokeRequest ();
+                HttpDynvokeRequest dynReq = new HttpDynvokeRequest();
 
                 dynReq.Controller = parts [0];
                 dynReq.Action = parts [1];
                 dynReq.RequestBody = Uri.UnescapeDataString (new StreamReader (request.InputStream, request.ContentEncoding).ReadToEnd ());
 
-                dynResp = dynvoke.HandleRequest (dynReq);
+                dynResp = this.HttpDynvoke.HandleRequest(dynReq);
             }
 
             response.StatusCode = dynResp.StatusCode;
