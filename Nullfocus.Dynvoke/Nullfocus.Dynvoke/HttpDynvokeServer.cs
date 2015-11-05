@@ -129,7 +129,8 @@ namespace Nullfocus.Dynvoke
 
             response.StatusCode = dynResp.StatusCode;
             response.ContentType = dynResp.ContentType;
-
+            response.AddHeader("Content-Length", dynResp.ResponseBody.length);
+            
             using (StreamWriter writer = new StreamWriter (response.OutputStream))
                 writer.Write (dynResp.ResponseBody);
         }
